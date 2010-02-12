@@ -79,10 +79,10 @@ class RedditClone extends Step
         val title = params("title").trim
         val url = params("url").trim
         val target =
-            if (title isEmpty) "/new?msg=Invalid Title"
-            else if (invalidUrl(url)) "/new?msg=Invalid URL"
-            else if (data.exists(entry => entry.url.equalsIgnoreCase(url)))
-                "/new?msg=Link already submitted"
+            if (title isEmpty) "/new?msg=Invalid Title!"
+            else if (invalidUrl(url)) "/new?msg=Invalid URL!"
+            else if (data.exists{_.url.equalsIgnoreCase(url)})
+                "/new?msg=Link already submitted!"
             else {
                 data = Entry(title, url, 1, new DateTime) :: data
                 "/"
@@ -92,7 +92,7 @@ class RedditClone extends Step
 
     def rate(url: String, value: Int) = {
         data.synchronized {
-            data.find(entry => entry.url.equalsIgnoreCase(url)) match {
+            data.find(_.url.equalsIgnoreCase(url)) match {
                 case Some(entry) => entry.score += value
                 case None => ()
             }
