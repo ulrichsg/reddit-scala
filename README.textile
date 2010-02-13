@@ -1,0 +1,180 @@
+h2. About
+
+Today I randomly stumbled over Lau Jensen's "blog article":http://www.bestinclass.dk/index.php/2010/02/reddit-clone-in-10-minutes-and-91-lines-of-clojure/ ("Part 2":http://www.bestinclass.dk/index.php/2010/02/reddit-clone-with-user-registration/) where he presents a "clone" of "Reddit":http://www.reddit.com/, implemented in a mere 91 lines of "Clojure":http://clojure.org/ to showcase the language's highly compact syntax. Always eager to compare Clojure with other languages, Lau was asking for people to produce Scala and Haskell implementations in particular. Now, since I am very interested in Scala, but never had the opportunity for some practical work in it before, I spontaneously decided to take up his challenge. A few hours later (I'm a newbie, remember), and here is _Reddit.Scala_!
+
+Note that I'm not shooting for the least possible number of lines with this program; rather, I'm aiming for readable and idiomatic Scala code - the kind of code that I like working with best.
+
+
+h2. Basics
+
+Lau's Clojure program uses "Compojure":http://github.com/weavejester/compojure, a lightweight web framework, for building HTML pages and processing HTTP requests. Now, Scala has XML literals built into its syntax, so I don't need any framework to build pages, but I still have to deal with the request processing part. Fortunately, there is a Scala framework called "Step":http://github.com/alandipert/step that can do this for me. It's actually quite similar to Compojure, aside from the fact that it does not have any factory methods for HTML elements.
+
+I decided to model my data using a class. I could have done it like Lau and used hash maps, but in an object-oriented language like Scala, I think classes make the most sense. For a little extra conciseness, I made it a @case class@, declaring the @score@ member mutable so I can adjust the score later without much hassle. I also gave it a method to output itself as an HTML element:
+
+<pre><code>
+case class Entry(title: String, url: String, var score: Int, date: DateTime)
+{
+    def toHtml = {
+        val printer = new PeriodFormatterBuilder()
+            .appendDays.appendSuffix(" day ", " days ")
+            .appendHours.appendSuffix(" hour ", " hours ")
+            .appendMinutes.appendSuffix(" minute ", " minutes ")
+            .printZeroAlways()
+            .appendSeconds.appendSuffix(" second", " seconds")
+            .toPrinter
+        var buf = new StringBuffer
+        printer.printTo(buf, new Period(date, new DateTime), Locale.getDefault)
+        <li>
+            <a href={url}>{title}</a>
+            <span style="size: -1; color: gray;">Posted {buf.toString} ago, {score} points</span>
+            <a href={"/up/"+url}>Up</a>
+            <a href={"/down/"+url}>Down</a>
+        </li>
+    }
+}
+</code></pre>
+
+I used the same date/time formatter as Lau did - "Joda Time":http://joda-time.sourceforge.net/ -, thus our versions look quite similar once you get over the syntactic differences between Scala and Clojure. The extra @printZeroAlways()@ makes sure that even a period of "0 seconds" is printed. Joda Time's documentation suggests that this should be the case by default, but for me it wasn't.
+
+
+h2. Templating With Step
+
+In the Step framework, GET or POST requests to a particular URLs are mapped to handlers in a way somewhat different from Compojure's. Here I call @get("/my/path", handler)@ for every URL I want to accept, where @handler@ is a function that returns an XML literal. Those functions are independent from the framework, so I can cut a bit of boilerplate by putting the HTML scaffold into a separate method:
+
+<pre><code>
+def createHtml(title: String, content: Seq[Node]) = {
+    <html>
+        <head>
+            <title>{title}</title>
+        </head>
+        <body>
+            {content}
+        </body>
+    </html>
+}
+</code></pre>
+
+Scala allows both single XML elements and sequences of elements as literals; the former are turned into @scala.xml.Elem@s, the latter into @scala.xml.NodeBuffer@s. A @NodeBuffer@ is-a @Seq[Node]@, and as we see in the above code, those integrate into @Elem@s just fine.
+
+
+h2. The Home Page
+
+Using the above template method, I render my home page like this:
+
+<pre><code>
+get("/") {
+    createHtml("Reddit.Scala",
+        <h1>Reddit.Scala</h1>
+        <h3>In slightly more than 100 lines of Scala</h3>
+        <a href="/">Refresh</a>
+        <span> &ndash; </span>
+        <a href="/new">Add link</a>
+        <h2>Highest ranking entries</h2>
+        <ol>{ renderLinks {(e1, e2) => e1.score > e2.score} }</ol>
+        <h2>Most recent submissions</h2>
+        <ol>{ renderLinks {(e1, e2) => e1.date isAfter e2.date} }</ol>
+    )
+}
+</code></pre>
+
+The only interesting part in this otherwise plain sequence of HTML elements are the calls to @renderLinks@. Here's how this method looks like:
+
+<pre><code>
+def renderLinks(sortFunc: (Entry, Entry) => Boolean) = 
+   for (entry <- data.sort(sortFunc)) yield entry.toHtml
+</code></pre>
+
+Amazingly concise. No surprise, though, this is functional programming after all.
+
+By the way, I initially tried to place the @<ol>...</ol>@ tag in the @toHtml@ method, but Scala didn't allow me to put code inside an XML element sequence at the top level. This is also why I had to wrap the @&ndash;@ separating the two links inside a @<span/>@.
+
+
+h2. Adding Links
+
+The form for submitting links looks, naturally, quite similar to Lau's:
+
+<pre><code>
+get("/new") {
+    createHtml("Reddit.Scala: submit new link",
+        <h1>Submit new link</h1>
+        <span style="color:red">{ params("msg") }</span>
+        <form action="/new" method="post">
+            <div>URL: <input type="text" name="url" size="48" value="http://"/></div>
+            <div>Title: <input type="text" name="title" size="48"/></div>
+            <input type="submit" value="Add link"/>
+        </form>
+    )
+}
+</code></pre>
+
+One notable difference is that Compojure's HTML factory automatically aligns the form elements nicely. With Step I would have to do this manually, So here's a little optical advantage for the Clojure solution.
+
+I also don't check if @msg@ is empty. As I mentioned before, due to Scala's rules for XML sequences I have to use an element tag whenever I want to insert some data - I can't choose to maybe insert something dependent on some boolean expression. However, if there is no message, the @<span/>@ will be invisible anyway, so I just insert it without checking. Not the cleanest solution, but it suffices for my purposes.
+
+Here's the @POST@ handler that processes my input:
+
+<pre><code>
+post("/new") {
+    val title = params("title").trim
+    val url = params("url").trim
+    val target =
+        if (title isEmpty) "/new?msg=Invalid Title!"
+        else if (invalidUrl(url)) "/new?msg=Invalid URL!"
+        else if (data.exists{_.url.equalsIgnoreCase(url)})
+            "/new?msg=Link already submitted!"
+        else {
+            data = Entry(title, url, 1, new DateTime) :: data
+            "/"
+        }
+    redirect(target)
+}
+</code></pre>
+
+This is almost a direct translation of Lau's method, with a couple of @val@s thrown in to hold the data I receive via @params()@ (Compojure has already extracted the parameters in its @defroutes@ function). I like how I can use @if@ as an expression rather than a statement, giving some extra conciseness to the assignment to @target@. I suppose I could do away with @target@ and plug the @if@ expression directly into @redirect()@, but I prefer keeping the extra variable for clarity.
+
+When it came to @invalidUrl@, I was very impressed with Lau's use of a @try...catch@ expression. Nifty! To my great pleasure, I realized Scala can do that, too:
+
+<pre><code>
+def invalidUrl(url: String) =
+    try { val foo = new java.net.URL(url); url isEmpty } catch { case _ => true }
+</code></pre>
+
+I initially wrote @def invalidUrl(url: String) = url isEmpty || try { ... }@, but I kept getting errors, so I moved the @isEmpty@ call to the inside of the @try@ block. This means I always create a @URL@ object even if @url@ is empty, but that is hardly a critical waste of resources.
+
+
+h2. Rating Posts
+
+Only two handlers left - @up/@ and @down/@. They do almost the same, so I moved the common code into a separate method:
+
+<pre><code>
+def rate(url: String, value: Int) = {
+    data.synchronized {
+        data.find(_.url.equalsIgnoreCase(url)) match {
+            case Some(entry) => entry.score += value
+            case None => ()
+        }
+    }
+}
+
+get("/up/:url") {
+    rate(params(":url"), 1)
+    redirect("/")
+}
+
+get("/down/:url") {
+    rate(params(":url"), -1)
+    redirect("/")
+}
+</code></pre>
+
+Step can extract parameters directly from the request URL if you specify them with a leading colon in the argument's handler. (This works even when there are forward slashes in the argument, as is common for URLs).The @rate()@ method shows how Scala handles synchronization. Otherwise there is nothing special to see here.
+
+
+h2. Conclusion
+
+The "entire program":http://github.com/ulrichsg/reddit-scala/blob/master/src/reddit-clone.scala spans 111 lines, i.e., 20 more than the Clojure solution. This isn't surprising - Scala doesn't _quite_ reach the level of terseness that Clojure has (and I could certainly shave off a few more lines if I tried, but I don't want to) - but I am very satisfied with it nonetheless. The code is much more compact than anything I could have managed with Java, and at the same time highly elegant and readable; in particular, someone unfamiliar with Lisp will probably find it much more readable than Clojure. I therefore contend that both languages are on equal footing in this "contest".
+
+
+h2. Disclaimer
+
+Reddit is (C) 2010 Conde Nast Digital. This code has nothing to do with the actual reddit.com site and is not intended to violate their rights (nor is it actually capable of doing that). It is just a little exercise in programming.
