@@ -1,11 +1,11 @@
 import com.thinkminimo.step.Step
 import org.joda.time.{DateTime, Period}
 import org.joda.time.format.PeriodFormatterBuilder
-import scala.collection.mutable.HashSet
+import scala.collection.mutable.{HashSet, SynchronizedSet}
 import scala.xml.Node
 import java.util.Locale
 
-case class Entry(title: String, url: String, var score: Int, date: DateTime)
+case class Entry(title: String, url: String, username: String, var score: Int, date: DateTime)
 {
     def toHtml = {
         val printer = new PeriodFormatterBuilder()
@@ -19,7 +19,7 @@ case class Entry(title: String, url: String, var score: Int, date: DateTime)
         printer.printTo(buf, new Period(date, new DateTime), Locale.getDefault)
         <li>
             <a href={url}>{title}</a>
-            <span style="size: -1; color: gray;">Posted {buf.toString} ago, {score} points</span>
+            <span style="size: -1; color: gray;">Posted by {username}, {buf.toString} ago, {score} points</span>
             <a href={"/up/"+url}>Up</a>
             <a href={"/down/"+url}>Down</a>
         </li>
@@ -31,11 +31,11 @@ case class User(name: String, password: String, email: String)
 class RedditClone extends Step
 {
     var data = List(
-        Entry("The Scala Programming Language", "http://www.scala-lang.org/", 1, new DateTime))
+        Entry("The Scala Programming Language", "http://www.scala-lang.org/", "UlrichSG", 1, new DateTime))
         
     var registeredUsers = List(User("UlrichSG", "password", "ulrichsg@somewhere.de"))
     
-    var onlineUsers = new HashSet[User]
+    var onlineUsers = new HashSet[User] with SynchronizedSet[User]
     
     def currentUser = session("username") match {
         case Some(username) => registeredUsers.find(_.name == username)
@@ -46,11 +46,7 @@ class RedditClone extends Step
     
     def showLoginStatus = currentUser match {
         case Some(user) => <span>{user.name} <a href="/logout">(Log out)</a></span>
-        case None => {
-            <a href="/login">(Log in)</a>
-            <span> &ndash; </span>
-            <a href="/register">(Register)</a>
-        }
+        case None => <a href="/login">(Log in)</a>
     }
                     
     def createHtml(title: String, content: Seq[Node]) = {
@@ -59,7 +55,7 @@ class RedditClone extends Step
                 <title>{title}</title>
             </head>
             <body>
-                <div style="float:right">{ showLoginStatus }</div>
+                <div style="float:right">{showLoginStatus}</div>
                 {content}
             </body>
         </html>
@@ -117,7 +113,7 @@ class RedditClone extends Step
         registeredUsers.find(_.name == username) match {
             case Some(user) if user.password == password => {
                 session("username") = username
-                onlineUsers += user
+                onlineUsers.synchronized { onlineUsers += user }
                 redirect("/")
             }
             case _ => redirect("/login?msg=Unknown username or wrong password")
@@ -126,7 +122,7 @@ class RedditClone extends Step
     
     get("/logout") {
         currentUser match {
-            case Some(user) => onlineUsers -= user
+            case Some(user) => onlineUsers.synchronized { onlineUsers -= user }
             case _ => ()
         }
         session.invalidate
@@ -149,7 +145,7 @@ class RedditClone extends Step
         val username = params("username").trim
         val password = params("password").trim
         val email = params("email").trim
-        val target =
+        val target = registeredUsers.synchronized {
             if (username isEmpty) "/register?msg=No name given!"
             else registeredUsers.find(u => u.name == username || u.email == email) match {
                 case Some(_) => "/register?msg=Username and/or e-mail address already taken!"
@@ -158,18 +154,22 @@ class RedditClone extends Step
                     "/"
                 }
             }
+        }
         redirect(target)
     }
     
     get("/new") {
-        createHtml("Reddit.Scala: submit new link",
+        currentUser match {
+            case None => redirect("/register")
+            case _ => createHtml("Reddit.Scala: submit new link",
             <h1>Submit new link</h1>
             <span style="color:red">{ params("msg") }</span>
             <div>{ form("post", "/new", List(
                 textField("URL:", "url", 48, "http://"),
                 textField("Title:", "title", 48, ""),
                 submitButton("Add link"))) }</div>
-        )
+            )
+        }
     }
     
     def invalidUrl(url: String) =
@@ -179,12 +179,13 @@ class RedditClone extends Step
         val title = params("title").trim
         val url = params("url").trim
         val target =
-            if (title isEmpty) "/new?msg=Invalid Title!"
+            if (currentUser isEmpty) "/register"
+            else if (title isEmpty) "/new?msg=Invalid Title!"
             else if (invalidUrl(url)) "/new?msg=Invalid URL!"
             else if (data.exists{_.url.equalsIgnoreCase(url)})
                 "/new?msg=Link already submitted!"
             else {
-                data = Entry(title, url, 1, new DateTime) :: data
+                data = Entry(title, url, currentUser.get.name, 1, new DateTime) :: data
                 "/"
             }
         redirect(target)

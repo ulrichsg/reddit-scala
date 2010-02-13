@@ -1,9 +1,11 @@
-h2. About
+h1. About
 
 Today I randomly stumbled over Lau Jensen's "blog article":http://www.bestinclass.dk/index.php/2010/02/reddit-clone-in-10-minutes-and-91-lines-of-clojure/ ("Part 2":http://www.bestinclass.dk/index.php/2010/02/reddit-clone-with-user-registration/) where he presents a "clone" of "Reddit":http://www.reddit.com/, implemented in a mere 91 lines of "Clojure":http://clojure.org/ to showcase the language's highly compact syntax. Always eager to compare Clojure with other languages, Lau was asking for people to produce Scala and Haskell implementations in particular. Now, since I am very interested in Scala, but never had the opportunity for some practical work in it before, I spontaneously decided to take up his challenge. A few hours later (I'm a newbie, remember), and here is _Reddit.Scala_!
 
 Note that I'm not shooting for the least possible number of lines with this program; rather, I'm aiming for readable and idiomatic Scala code - the kind of code that I like working with best.
 
+
+h1. The original application
 
 h2. Basics
 
@@ -175,6 +177,121 @@ h2. Conclusion
 The "entire program":http://github.com/ulrichsg/reddit-scala/blob/master/src/reddit-clone.scala spans 111 lines, i.e., 20 more than the Clojure solution. This isn't surprising - Scala doesn't _quite_ reach the level of terseness that Clojure has (and I could certainly shave off a few more lines if I tried, but I don't want to) - but I am very satisfied with it nonetheless. The code is much more compact than anything I could have managed with Java, and at the same time highly elegant and readable; in particular, someone unfamiliar with Lisp will probably find it much more readable than Clojure. I therefore contend that both languages are on equal footing in this "contest".
 
 
-h2. Disclaimer
+h1. Extension: Adding user management 
+
+The first thing Lau added to his original Clojure program was "user registration":http://www.bestinclass.dk/index.php/2010/02/reddit-clone-with-user-registration/, so naturally I was also going to do this. I didn't except it to be difficult, and indeed it was not. :-)
+
+
+h2. Storing Data
+
+As before with Entries, I use a @case class@ to store user data. This time it's even easier because I need neither mutable fields nor rendering methods. I keep registered users in a list and online users in a mutable @HashSet@, which looks very easy to use:
+
+<pre><code>
+case class User(name: String, password: String, email: String)
+
+var registeredUsers = List(User("UlrichSG", "password", "ulrichsg@somewhere.de"))
+
+var onlineUsers = new HashSet[User] with SynchronizedSet[User]
+</code></pre>
+
+The @with SynchronizedSet[User]@ part is a _mixin_, which is a very cool feature of Scala. In this case it makes my HashSet threadsafe so I don't have to explicitly synchronize over it later.
+
+I also create a small utility method to easily access the record of the user curently logged in, if any. Scala's @Option@ class makes handling the "if any" part quite painless:
+
+<pre><code>
+def currentUser = session("username") match {
+    case Some(username) => registeredUsers.find(_.name == username)
+    case None => None
+}
+</code></pre>
+
+
+h2. Some More Templating
+
+In the original version of my program, the HTML form looked somewhat disorderly because I didn't want to blow up my code with table definitions. However, now I am going to need two more forms (for registering and logging in), so it would make sense to create custom building functions for them - and that means I can add formatting quite efficiently.
+
+Basically, I recreated Compojure's @form-to@ function. Not having an HTML generator provided by the framework, I also added "sub-functions" for the input elements:
+
+<pre><code>
+def textField(label: String, name: String, length: Int, default: String) =
+    <tr>
+        <td>{label}</td>
+        <td><input type="text" name={name} length={length.toString} value={default}/></td>
+    </tr>
+    
+def submitButton(caption: String) =
+    <tr>
+        <td colspan="2"> <input type="submit" value={caption}/> </td>
+    </tr>
+
+def form(method: String, url: String, content: Seq[Node]) =
+    <form action={url} method={method}>
+        <table cellspacing="5">
+            {content}
+        </table>
+    </form>
+</code></pre>
+ 
+This allows me to specify my login screen in a very concise manner:
+
+<pre><code>
+get("/login") {
+    createHtml("Reddit.Scala: log in",
+        <h1>Log in</h1>
+        <span style="color:red">{ params("msg") }</span>
+        <div>{ form("post", "/login", List(
+            textField("Username:", "username", 25, ""),
+            textField("Password:", "password", 25, ""),
+            submitButton("Enter"))) }</div>
+    )
+}
+</code></pre>
+
+I am not perfectly happy with this solution yet. Firstly, if I could give the text field's @default@ parameter a default value of @""@, that parameter could be dropped from most of this function's invocations. Unfortunately, the current Scala version does not suport default arguments. Fortunately, the upcoming Scala 2.8, which is currently in beta, will.
+
+Additionally, password fields really should have @type="password"@ instead of @type="text"@. This, too, could be solved with a default argument.
+
+
+h2. Handling Logins and Registrations
+
+HTML forms are not terribly interesting, so let's look straight at the business code. Just like Compojure, Step supports session handling:
+
+<pre><code>
+post("/login") {
+    val username = params("username").trim
+    val password = params("password").trim
+    registeredUsers.find(_.name == username) match {
+        case Some(user) if user.password == password => {
+            session("username") = username
+            onlineUsers += user
+            redirect("/")
+        }
+        case _ => redirect("/login?msg=Unknown username or wrong password")
+    }
+}
+</code></pre>
+
+I first tried to match the user as @case Some(user: User(_, password, _)) => ...@, but for some reason this did not compile. Using a guarded match works just fine, though, and is even more intuitive.
+
+Logging out is a fairly trivial matter now:
+
+<pre><code>
+get("/logout") {
+    currentUser match {
+        case Some(user) => onlineUsers -= user
+        case _ => ()
+    }
+    session.invalidate
+    redirect("/")
+}
+</code></pre>
+
+
+h2. Conclusion
+
+I'll skip over the rest, as it doesn't introduce any new concepts. All together, I have added 100 lines to the program, which is now 211 lines long - Lau's Clojure version weighs in at 160. It would seem that Scala is falling behind faster than expected in terms of pure LOC, but I think the difference is due to the HTML form helpers that Lau did not have to write because Compojure already allows him to define his forms in a very concise notation. The code is now long enough to benefit from splitting into multiple files - the HTML helpers being a particularly good candidate -, but like Lau I'll make an exception here. Anyway, Scala is still cheerfully and elegantly handling every task I use it for. The only thing I was missing were default argument values. However, these - as well as keyword arguments, another very nice feature - will be in the next release, so there's no need to complain.
+
+
+h3. Disclaimer
 
 Reddit is (C) 2010 Conde Nast Digital. This code has nothing to do with the actual reddit.com site and is not intended to violate their rights (nor is it actually capable of doing that). It is just a little exercise in programming.
