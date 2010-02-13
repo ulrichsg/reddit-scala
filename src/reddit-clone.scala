@@ -60,18 +60,38 @@ class RedditClone extends Step
         )
     }
     
+    def textField(label: String, name: String, length: Int, default: String) = {
+        <tr>
+            <td>{label}</td>
+            <td><input type="text" name={name} length={length.toString} value={default}/></td>
+        </tr>
+    }
+        
+    def submitButton(caption: String) = { 
+        <tr>
+            <td colspan="2"> <input type="submit" value={caption}/> </td>
+        </tr>
+    }
+    
+    def form(method: String, url: String, content: Seq[Node]) = {
+        <form action={url} method={method}>
+            <table cellspacing="5">
+                {content}
+            </table>
+        </form>
+    }
+    
     get("/new") {
         createHtml("Reddit.Scala: submit new link",
             <h1>Submit new link</h1>
             <span style="color:red">{ params("msg") }</span>
-            <form action="/new" method="post">
-                <div>URL: <input type="text" name="url" size="48" value="http://"/></div>
-                <div>Title: <input type="text" name="title" size="48"/></div>
-                <input type="submit" value="Add link"/>
-            </form>
+            <div>{ form("post", "/new", List(
+                textField("URL:", "url", 48, "http://"),
+                textField("Title:", "title", 48, ""),
+                submitButton("Add link"))) }</div>
         )
     }
-
+    
     def invalidUrl(url: String) =
         try { val foo = new java.net.URL(url); url isEmpty } catch { case _ => true }
     
